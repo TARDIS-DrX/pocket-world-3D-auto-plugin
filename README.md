@@ -1,5 +1,7 @@
 # Pocket World Quick Assembly
 
+这款游戏本应该为人们带去休闲放松与娱乐，却搞什么限时拼完。被广告和延时道具的限制恶心的不行，遂vibecoding一款自动拼完的插件。**点击“自动拼完”按钮即可在不消耗实际道具的情况下复现自动拼完功能**。下面都是AI写的，也没有什么可说的，打开点击就完事了。
+
 > 把重复的拼装，交还给游戏自己完成。
 
 ![Windows](https://img.shields.io/badge/platform-Windows-0078D4)
