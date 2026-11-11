@@ -1,0 +1,29 @@
+{
+  "package": "com.puzzle.miniworld.cn",
+  "versions": {
+    "3.2.9": {
+      "versionName": "3.2.9",
+      "versionCode": 30011290,
+      "apkSize": 426665902,
+      "libEntry": "lib/arm64-v8a/libil2cpp.so",
+      "dataOffset": 15630336,
+      "targetFileOffset": 32037148,
+      "patches": [
+        {
+          "name": "AutoFinishBtnClick",
+          "fileOffset": 31986172,
+          "absoluteOffset": 47616508,
+          "expected": "fe0f1df8",
+          "replace": "c8310014"
+        },
+        {
+          "name": "TipBtnCallBack",
+          "fileOffset": 31987092,
+          "absoluteOffset": 47617428,
+          "expected": "ff8303d1",
+          "replace": "e2300014"
+        }
+      ]
+    }
+  }
+}
