@@ -1,8 +1,8 @@
-# Pocket World Quick Assembly
+# 我爱拼模型（Pocket World）快速拼装插件
 
 这款游戏本应该为人们带去休闲放松与娱乐，却搞什么限时拼完。被广告和延时道具的限制恶心的不行，遂vibecoding一款自动拼完的插件。**点击“自动拼完”按钮即可在不消耗实际道具的情况下复现自动拼完功能**。下面都是AI写的，也没有什么可说的，打开点击就完事了。
 
-> 把重复的拼装，交还给游戏自己完成。
+> 回归游戏本身的乐趣，更加自由
 
 ![Windows](https://img.shields.io/badge/platform-Windows-0078D4)
 ![Python](https://img.shields.io/badge/python-3.10%2B-3776AB)
@@ -26,11 +26,36 @@
 - **尽量少改东西**：每个入口只改 4 字节，不携带 APK 或游戏资源。
 - **随时可以恢复**：保存原始字节，运行一次 `restore` 即可还原。
 
-## 快速开始
+## 下载插件
+
+### 从 GitHub Releases 下载
+
+1. 打开仓库首页。
+2. 点击右侧的 **Releases**。
+3. 下载最新版本的 `pocket-world-quick-assembly-github.zip`。
+4. 将压缩包解压到一个固定目录。
+
+不要直接在压缩包预览窗口中运行脚本。
+
+### 从源码下载
+
+在仓库首页点击 **Code**，然后选择 **Download ZIP**。解压后同样可以直接使用。
+
+仓库不包含游戏 APK。请先确认 TapTap 已经下载并安装目标游戏。
+
+## 使用插件
+
+先在解压后的插件目录中打开 PowerShell。如果系统阻止脚本运行，可以仅对当前窗口临时放行：
+
+```powershell
+Set-ExecutionPolicy -Scope Process Bypass
+```
+
+这个命令不会修改系统的长期执行策略。
 
 ### 1. 打开调试 root
 
-关闭 TapTap 和 MuMu，然后运行：
+关闭 TapTap 和 MuMu，在插件目录中运行：
 
 ```powershell
 .\enable-root-mode.ps1
@@ -44,7 +69,7 @@
 .\bootstrap.ps1
 ```
 
-需要 Python 3.10+ 和 .NET 6 Runtime。
+脚本会检查 Python、.NET 6 Runtime、ADB 和 Il2CppDumper。缺少组件时会给出提示。
 
 ### 3. 进入一个拼装关卡
 
@@ -56,7 +81,7 @@
 .\run.ps1
 ```
 
-助手会读取当前游戏版本、准备补丁并应用。进入关卡后，点击自动拼按钮或提示按钮即可。
+助手会自动完成版本检测、补丁准备和应用。进入拼装关卡后，点击自动拼按钮或提示按钮即可开始。
 
 ## 版本支持
 
