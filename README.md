@@ -1,144 +1,126 @@
 # 我爱拼模型（Pocket World）快速拼装插件
 
-这款游戏本应该为人们带去休闲放松与娱乐，却搞什么限时拼完。被广告和延时道具的限制恶心的不行，遂vibecoding一款自动拼完的插件。**点击“自动拼完”按钮即可在不消耗实际道具的情况下复现自动拼完功能**。下面都是AI写的，也没有什么可说的，打开点击就完事了。
-
-> 回归游戏本身的乐趣，更加自由
+面向 TapTap MuMu 版《我爱拼模型 / Pocket World 3D》的本地浮窗助手。它通过 Frida 把 ARM64 插件加载进游戏的 IL2CPP 进程，在 Unity 主线程调用游戏原有的功能路径。
 
 ![Windows](https://img.shields.io/badge/platform-Windows-0078D4)
 ![Python](https://img.shields.io/badge/python-3.10%2B-3776AB)
-![Game](https://img.shields.io/badge/Pocket%20World%203D-3.2.9-2ea44f)
+![Game](https://img.shields.io/badge/Pocket%20World%203D-3.3.0-2ea44f)
 
-这是一个面向 TapTap MuMu 版《我爱拼模型 / Pocket World 3D》的本地拼装助手。
+## 功能
 
-它不替你写一套“假拼装”。它找到游戏里原本就存在的自动拼接流程，让那个按钮真正为你工作。
+- **自动拼完**：降低 `battlePanel.autoPuzzleSpeed`，再调用 `PuzzleManager.StartAutoFinishPuzzle()`，保留逐件动画和连击计分。
+- **金币 / 钻石不消耗**：阻止 Coin/Diamond 的消耗同步，并让 `CostGoods` 保留当前余额。
+- **广告破解**：调用游戏自己的去广告路径，并触发广告奖励回调。
+- **VIP 会员**：写入 VIP 标志，并调用月卡/VIP 成功回调。
+- **解锁当前主题**：只解锁当前打开的主题详情页。
+- **单实例浮窗**：跟随游戏启动和退出，展开后可以拖动。
 
-## 交互
-- 默认是 64×64 半透明悬浮球，右上角显示状态圆点。
-- 红点：模拟器未连接或游戏未启动。
-- 绿点：检测到 com.puzzle.miniworld.cn 正在运行。
-- 点击悬浮球展开面板，里面有矩形按钮 “自动拼完”。
-- 点击按钮后自动执行：部署 ARM64 库 → Frida 加载 → 写触发文件 → 游戏调用 StartAutoFinishPuzzle。
-- 按钮下方显示执行结果或错误。
-- 拖动悬浮球可移动；右键退出；面板右上角 × 收起。
-## 状态检测
-- 每 2.5 秒通过 ADB 检查模拟器连接与游戏进程。
-- 游戏未启动时按钮禁用，不会误触发。
+## 目录
 
-## 为什么做这个
-
-拼模型最舒服的时刻，是看一个场景慢慢成形。
-
-但当零件已经熟悉、关卡开始重复，一次次拖动、对准和等待吸附，就变成了机械劳动。这个项目只处理这段重复过程，让你把时间留给新模型、新场景和收藏本身。
-
-## 它能做什么
-
-- **一键复用游戏原有拼接流程**：不重新实现拼装算法。
-- **同时接管两个入口**：自动拼按钮和提示按钮都能直接启动拼接。
-- **跟着游戏一起更新**：检测版本号、版本代码和 APK 大小，新版本自动重新分析。
-- **尽量少改东西**：每个入口只改 4 字节，不携带 APK 或游戏资源。
-- **随时可以恢复**：保存原始字节，运行一次 `restore` 即可还原。
-
-## 下载插件
-
-### 从 GitHub Releases 下载
-
-1. 打开仓库首页。
-2. 点击右侧的 **Releases**。
-3. 下载最新版本的 `pocket-world-quick-assembly-github.zip`。
-4. 将压缩包解压到一个固定目录。
-
-不要直接在压缩包预览窗口中运行脚本。
-
-### 从源码下载
-
-在仓库首页点击 **Code**，然后选择 **Download ZIP**。解压后同样可以直接使用。
-
-仓库不包含游戏 APK。请先确认 TapTap 已经下载并安装目标游戏。
-
-## 使用插件
-
-先在解压后的插件目录中打开 PowerShell。如果系统阻止脚本运行，可以仅对当前窗口临时放行：
-
-```powershell
-Set-ExecutionPolicy -Scope Process Bypass
+```text
+run.ps1                     启动浮窗；带参数时转发给插件 CLI
+run-overlay.ps1             兼容入口，等同 run.ps1
+bootstrap.ps1               环境检查
+enable-root-mode.ps1        给 MuMu 打开 root
+disable-root-mode.ps1       关闭 root
+work/plugin/
+  pw3dmod.c                 ARM64 插件源码
+  libpw3dmod.so             预编译插件
+  build.ps1                 交叉编译脚本
+  pw3d_plugin.py            部署、加载、命令、日志
+  floating_ui.ps1           WPF 浮窗
+  watch_game.ps1            游戏进程检测
+  install_autostart.ps1     登录自启动
+work/frida-agent/bundle.js  Frida Java bridge
+work/tools/                 编译用 bionic 存根库
 ```
 
-这个命令不会修改系统的长期执行策略。
+## 使用
 
-### 1. 打开调试 root
-
-关闭 TapTap 和 MuMu，在插件目录中运行：
+1. 关闭 TapTap 和 MuMu，运行：
 
 ```powershell
 .\enable-root-mode.ps1
 ```
 
-完成后重新启动 TapTap、MuMu 和目标游戏。
-
-### 2. 检查环境
+2. 重新打开 TapTap、MuMu 和游戏。
+3. 检查环境：
 
 ```powershell
 .\bootstrap.ps1
 ```
 
-脚本会检查 Python、.NET 6 Runtime、ADB 和 Il2CppDumper。缺少组件时会给出提示。
-
-### 3. 进入一个拼装关卡
-
-风车村、京都 I，或者任意已解锁模型都可以。
-
-### 4. 启动助手
+4. 启动浮窗：
 
 ```powershell
 .\run.ps1
 ```
 
-助手会自动完成版本检测、补丁准备和应用。进入拼装关卡后，点击自动拼按钮或提示按钮即可开始。
+5. 点击悬浮球展开面板。首次会自动部署并加载插件。
 
-## 版本支持
-
-| 游戏版本 | Version Code | 状态 |
-| --- | ---: | --- |
-| `3.2.9` | `30011290` | 已验证补丁表 |
-
-遇到新版本时，助手会优先寻找 TapTap 下载的完整 APK；找不到时再从模拟器拉取。随后自动解包 IL2CPP、定位入口、生成新补丁表。
-
-## 常用命令
+命令行：
 
 ```powershell
-.\run.ps1            # 检测版本、应用补丁并启动游戏
-.\run.ps1 detect     # 只检测版本
-.\run.ps1 selftest   # 校验补丁表，不改游戏
-.\run.ps1 analyze    # 重新分析当前版本
-.\run.ps1 restore    # 恢复原始 APK 字节
+.\run.ps1 ensure
+.\run.ps1 cmd auto
+.\run.ps1 cmd free:1
+.\run.ps1 cmd ads:1
+.\run.ps1 cmd vip:1
+.\run.ps1 log
 ```
 
 ## 它是怎么工作的
 
-游戏里已经有完整的自动拼接状态机：
-
 ```text
-PuzzleManager.StartAutoFinishPuzzle()
+Python 写命令文件
+  → ARM64 插件读取命令
+  → GameManager.Update 的 MethodInfo 入口切到插件
+  → 在 Unity 主线程调用游戏自己的方法
+  → 结果写回 pw3d.result
 ```
 
-插件把 `AutoFinishBtnClick` 和 `TipBtnCallBack` 的入口转向这段已有逻辑。原本的道具确认和扣费流程不会进入。
+关键目标：
 
-说到底，它做的是“把入口接对”，而不是重写游戏。
+- 自动拼装：`PuzzleManager.StartAutoFinishPuzzle()`、`battlePanel.autoPuzzleSpeed`
+- 免消耗：`PlayerDataManager.CostGoods`、`GoodItemsManager.synGoodsList`
+- 广告：`PlayerDataManager.UpdateRemoveAdData`、`AdsMgr.HandleRewardBasedVideoRewarded`
+- VIP：`UserDataManager.SetInt("IsVipAndMonthCardPlayerKey")`、`VipDataManager.BuyMonthCardSuccess`
+- 主题：`KitInfoPanel.kit`、`UnLockKitLevelByKit`、`UpdateLevelKitDataIsUnlock`
 
-更多实现细节见 [How It Works](docs/how-it-works.md)，版本适配流程见 [Version Detection](docs/version-detection.md)。
+如果主线程入口 2 秒内没有收到 tick，会自动回退到工作线程执行，并在日志里写 `worker thread fallback`。
+
+## 日志
+
+```text
+/sdcard/Android/data/com.puzzle.miniworld.cn/files/pw3dmod.log
+```
+
+## 版本支持
+
+| 游戏版本 | 状态 |
+| --- | --- |
+| `3.3.0` | 已核对方法名与字段；金币/钻石、VIP、广告命令实测通过 |
+| `3.2.9` | 代码地图与自动拼链路已分析 |
+
+## 编译
+
+需要 Zig 0.13+（`zig` 在 PATH，或设置 `ZIG` 环境变量）：
+
+```powershell
+.\work\plugin\build.ps1
+```
 
 ## 安全边界
 
-- 只支持 TapTap MuMu 实例，包名固定为 `com.puzzle.miniworld.cn`。
-- 会直接修改已安装 APK 中的 4 字节入口，请先备份重要数据。
-- 仓库不包含 APK、游戏资源、账号数据或付费内容。
-- 请只在你有权控制的设备与账号上使用，并遵守游戏条款和当地法律。
+- 只支持 TapTap MuMu 实例，包名 `com.puzzle.miniworld.cn`。
+- 需要 root 和 `/data/local/tmp/frida-server-x86_64`。
+- 仓库不包含游戏 APK、账号数据或付费内容。
+- 仅用于个人学习、测试与已授权环境；请遵守游戏条款和当地法律。
 
 ## 开发
 
 ```powershell
-python -m unittest discover -s tests -v
-python .\plugin.py selftest
+python -m py_compile work\plugin\pw3d_plugin.py
 ```
 
 项目代码采用 MIT License。第三方组件说明见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
