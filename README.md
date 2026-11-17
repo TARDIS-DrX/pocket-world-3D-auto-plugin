@@ -6,7 +6,7 @@
 ![Python](https://img.shields.io/badge/python-3.10%2B-3776AB)
 ![Game](https://img.shields.io/badge/Pocket%20World%203D-3.3.0-2ea44f)
 
-我不想再看到别人因为游戏道具被限制了，我希望大家都能开心自在的享受游戏，所以请看好了，我的**插件**！<img width="8" height="8" alt="00513ADC" src="https://github.com/user-attachments/assets/ec9aa7b6-0726-4dba-b7e9-323b43d345d1" />
+我不想再看到别人因为游戏道具被限制了，我希望大家都能开心自在的享受游戏，所以请看好了，我的**插件**！<img width="20" height="20" alt="00513ADC" src="https://github.com/user-attachments/assets/ec9aa7b6-0726-4dba-b7e9-323b43d345d1" />
 
 
 >回归游戏本身的乐趣
