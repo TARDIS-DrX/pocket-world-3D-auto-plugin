@@ -21,6 +21,7 @@ Usage:
 import ctypes
 import ctypes.wintypes
 import json
+import msvcrt
 import os
 import re
 import subprocess
@@ -43,6 +44,7 @@ RESULT = FILES + "/pw3d.result"
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 LIB = os.path.join(ROOT, "work", "plugin", "libpw3dmod.so")
 BUNDLE = os.path.join(ROOT, "work", "frida-agent", "bundle.js")
+LOCK = os.path.join(ROOT, "work", "plugin", "ensure.lock")
 
 
 def adb(*args, check=False):
@@ -204,11 +206,21 @@ def send_cmd(command, timeout=12.0):
 
 
 def ensure():
-    deploy()
-    if send_cmd("status", timeout=3.0) != "timeout":
-        return
-    load()
-    send_cmd("status", timeout=10.0)
+    lock = open(LOCK, "a+")
+    try:
+        msvcrt.locking(lock.fileno(), msvcrt.LK_LOCK, 1)
+        deploy()
+        for _ in range(3):
+            if send_cmd("status", timeout=3.0) != "timeout":
+                return
+        load()
+        send_cmd("status", timeout=10.0)
+    finally:
+        try:
+            msvcrt.locking(lock.fileno(), msvcrt.LK_UNLCK, 1)
+        except OSError:
+            pass
+        lock.close()
 
 
 def hotkey():

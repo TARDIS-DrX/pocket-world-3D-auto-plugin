@@ -15,6 +15,7 @@ $python = (Get-Command python).Source
 $logDir = Join-Path $root "work\plugin"
 $outLog = Join-Path $logDir "ui_run.out.log"
 $errLog = Join-Path $logDir "ui_run.err.log"
+$busyFile = Join-Path $logDir "ui_run.busy"
 $cfgPath = "/sdcard/Android/data/com.puzzle.miniworld.cn/files/pw3d.cfg"
 
 $xaml = @"
@@ -220,6 +221,7 @@ function Start-Command([string]$command, [string]$label) {
     $script:pendingLabel = $label
     $resultText.Text = "执行中：$label"
     Remove-Item $outLog, $errLog -ErrorAction SilentlyContinue
+    Set-Content -LiteralPath $busyFile -Value (Get-Date).ToString("o") -Encoding ASCII
     if ($command -eq "ensure") {
         $cliArgs = @("work\plugin\pw3d_plugin.py", "ensure")
     } else {
@@ -377,6 +379,7 @@ $runTimer.Add_Tick({
         }
         Update-ToggleVisuals
     }
+    Remove-Item $busyFile -ErrorAction SilentlyContinue
     $script:busy = $false
     Update-Status
     $runTimer.Start()
@@ -384,6 +387,7 @@ $runTimer.Add_Tick({
 $runTimer.Start()
 
 $window.Add_Closed({
+    Remove-Item $busyFile -ErrorAction SilentlyContinue
     try { $mutex.ReleaseMutex() } catch {}
 })
 

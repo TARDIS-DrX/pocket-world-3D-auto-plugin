@@ -4,6 +4,7 @@ $root = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 $adb = "D:\TapTap\Support\android_emulator\engine\nx_device\12.0\shell\adb.exe"
 $device = "127.0.0.1:16416"
 $uiScript = Join-Path $PSScriptRoot "floating_ui.ps1"
+$monitorScript = Join-Path $PSScriptRoot "monitor_game.ps1"
 
 $mutex = New-Object System.Threading.Mutex($false, "Global\PW3D-Watcher")
 if (-not $mutex.WaitOne(0)) {
@@ -41,6 +42,14 @@ function Start-UI {
         -WorkingDirectory $root -WindowStyle Hidden | Out-Null
 }
 
+function Start-Monitor {
+    Start-Process -FilePath "powershell.exe" `
+        -ArgumentList @("-NoProfile", "-ExecutionPolicy", "Bypass", "-WindowStyle", "Hidden", "-File", $monitorScript) `
+        -WorkingDirectory $root -WindowStyle Hidden | Out-Null
+}
+
+Start-Monitor
+
 $lastPid = $null
 while ($true) {
     $gamePid = Get-GamePid
@@ -48,6 +57,7 @@ while ($true) {
         if ($gamePid -ne $lastPid) {
             $lastPid = $gamePid
             Start-UI
+            Start-Monitor
         }
     } else {
         $lastPid = $null

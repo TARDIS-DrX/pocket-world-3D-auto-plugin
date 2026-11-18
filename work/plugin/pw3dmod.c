@@ -21,10 +21,16 @@ extern int mprotect(void *addr, size_t len, int prot);
 extern int pthread_create(unsigned long *thread, const void *attr,
                           void *(*start_routine)(void *), void *arg);
 extern int pthread_detach(unsigned long thread);
+extern int open(const char *path, int flags, ...);
+extern int flock(int fd, int operation);
 
 #define RTLD_NOW 2
 #define PROT_RW 3
 #define PROT_RWX 7
+#define O_RDWR 2
+#define O_CREAT 64
+#define LOCK_EX 2
+#define LOCK_NB 4
 
 static const char *LOG_PATH =
     "/sdcard/Android/data/com.puzzle.miniworld.cn/files/pw3dmod.log";
@@ -38,6 +44,7 @@ static const char *CFG_PATH =
     "/sdcard/Android/data/com.puzzle.miniworld.cn/files/pw3d.cfg";
 
 static int g_page_size = 4096;
+static int g_lock_fd = -1;
 
 static void log_line(const char *message, void *a, void *b) {
     FILE *log = fopen(LOG_PATH, "a");
@@ -309,18 +316,24 @@ static void apply_vip(int on);
 static void apply_ads(int on);
 static void free_maintain(void);
 
-static void gm_update(void *self) {
+static void gm_update(void *self, void *method) {
     g_main_tick++;
-    if (g_startup_flags != 0) {
-        int flags = g_startup_flags;
-        g_startup_flags = 0;
-        if ((flags & 4) != 0) {
+    if ((g_main_tick % 1800) == 0) {
+        log_line("main tick", (void *)(size_t)g_main_tick, 0);
+    }
+    if (g_startup_flags != 0 && g_main_tick > 900 &&
+        (g_main_tick % 180) == 0) {
+        if ((g_startup_flags & 4) != 0) {
+            g_startup_flags &= ~4;
+            log_line("startup free apply", 0, 0);
             free_apply(1);
-        }
-        if ((flags & 1) != 0) {
+        } else if ((g_startup_flags & 1) != 0) {
+            g_startup_flags &= ~1;
+            log_line("startup vip apply", 0, 0);
             apply_vip(1);
-        }
-        if ((flags & 2) != 0) {
+        } else if ((g_startup_flags & 2) != 0) {
+            g_startup_flags &= ~2;
+            log_line("startup ads apply", 0, 0);
             apply_ads(1);
         }
     }
@@ -331,7 +344,7 @@ static void gm_update(void *self) {
         free_maintain();
     }
     if (g_gm_orig != 0 && self != 0) {
-        ((void (*)(void *, void *))g_gm_orig)(self, 0);
+        ((void (*)(void *, void *))g_gm_orig)(self, method);
     }
 }
 
@@ -361,6 +374,11 @@ static void restore_main_dispatch(void) {
         *(void **)g_gm_method_info = g_gm_orig;
         log_line("main dispatch restored", g_gm_method_info, 0);
     }
+}
+
+static int dispatch_intact(void) {
+    return g_gm_method_info != 0 &&
+           *(void **)g_gm_method_info == (void *)gm_update;
 }
 
 /* ------------------------------------------------------------------ */
@@ -760,11 +778,15 @@ enum {
 
 static volatile int g_req_kind;
 static volatile int g_req_value;
+static int g_wait_ticks;
 
 static void execute_pending(void) {
     int kind = g_req_kind;
     int value = g_req_value;
     if (kind == REQ_NONE) {
+        return;
+    }
+    if (!g_use_main && kind != REQ_STATUS) {
         return;
     }
     g_req_kind = REQ_NONE;
@@ -884,32 +906,27 @@ static void *worker(void *arg) {
                         waited++;
                     }
                     g_use_main = g_main_tick > 0;
-                    if (!g_use_main) {
-                        restore_main_dispatch();
-                    }
                     log_line(g_use_main ? "main thread dispatch active"
-                                        : "worker thread fallback",
+                                        : "main dispatch waiting for tick",
                              (void *)(size_t)g_main_tick, 0);
                 }
                 load_cfg(&vip, &ads, &free_mode);
-                g_startup_flags =
-                    (vip ? 1 : 0) | (ads ? 2 : 0) | (free_mode ? 4 : 0);
-                if (!g_use_main) {
-                    if (free_mode) {
-                        free_apply(1);
-                    }
-                    if (vip) {
-                        apply_vip(1);
-                    }
-                    if (ads) {
-                        apply_ads(1);
-                    }
-                    g_startup_flags = 0;
-                }
+                g_startup_flags = 0;
                 log_line("plugin ready", (void *)(size_t)vip, (void *)(size_t)free_mode);
             }
         } else {
             char trigger[16];
+            if (!g_use_main && g_main_tick > 0) {
+                g_use_main = 1;
+                log_line("main thread dispatch active (late)", (void *)(size_t)g_main_tick, 0);
+            }
+            if ((settle % 8) == 0 && !dispatch_intact()) {
+                log_line("main dispatch lost, reinstalling",
+                         (void *)(size_t)g_main_tick, 0);
+                g_gm_orig = 0;
+                g_gm_method_info = 0;
+                install_main_dispatch();
+            }
             if (read_text_file(TRIGGER_PATH, trigger, (int)sizeof(trigger)) > 0) {
                 clear_text_file(TRIGGER_PATH);
                 g_req_kind = REQ_AUTO;
@@ -918,6 +935,17 @@ static void *worker(void *arg) {
                 }
             }
             read_command();
+            if (!g_use_main && g_req_kind != REQ_NONE) {
+                g_wait_ticks++;
+                if (g_wait_ticks > 32) {
+                    g_wait_ticks = 0;
+                    g_req_kind = REQ_NONE;
+                    write_result("error:no_main_thread");
+                    log_line("command dropped: no main thread", 0, 0);
+                }
+            } else {
+                g_wait_ticks = 0;
+            }
             settle++;
         }
         usleep(250000);
@@ -927,7 +955,13 @@ static void *worker(void *arg) {
 
 __attribute__((constructor)) static void pw3dmod_init(void) {
     unsigned long thread = 0;
-    log_line("pw3dmod v3 loaded", 0, 0);
+    log_line("pw3dmod v3.1 loaded", 0, 0);
+    g_lock_fd = open("/data/user/0/com.puzzle.miniworld.cn/files/pw3d.lock",
+                     O_CREAT | O_RDWR, 0666);
+    if (g_lock_fd >= 0 && flock(g_lock_fd, LOCK_EX | LOCK_NB) != 0) {
+        log_line("duplicate instance skipped", 0, 0);
+        return;
+    }
     if (pthread_create(&thread, 0, worker, 0) == 0) {
         pthread_detach(thread);
     }
