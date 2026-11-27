@@ -6,17 +6,18 @@
 ![Python](https://img.shields.io/badge/python-3.10%2B-3776AB)
 ![Game](https://img.shields.io/badge/Pocket%20World%203D-3.3.0-2ea44f)
 
-我不想再看到别人因为游戏道具被限制了，我希望大家都能开心自在的享受游戏，所以请看好了，我的**插件**！<img width="20" height="20" alt="00513ADC" src="https://github.com/user-attachments/assets/ec9aa7b6-0726-4dba-b7e9-323b43d345d1" />
+## 下载
 
-
->回归游戏本身的乐趣
+1. 打开仓库的 **Releases**。
+2. 下载 `pocket-world-quick-assembly-github.zip`。
+3. 解压到一个固定目录，不要直接在压缩包预览窗口里运行。
 
 ## 功能
 
 - **自动拼完**：降低 `battlePanel.autoPuzzleSpeed`，再调用 `PuzzleManager.StartAutoFinishPuzzle()`，保留逐件动画和连击计分。
-- **金币 / 钻石不消耗**：阻止 Coin/Diamond 的消耗同步，并让 `CostGoods` 保留当前余额。
-- **广告破解**：调用游戏自己的去广告路径，并触发广告奖励回调。
-- **VIP 会员**：写入 VIP 标志，并调用月卡/VIP 成功回调。
+- **金币 / 钻石不消耗（A 方案）**：主线程读取 `PlayerDataManager.GetGoods`，检测到余额下降后进入 5 秒购买窗口，按 300ms 间隔用 `SetGoods` 回写到目标值。只保证客户端显示，不绕过服务端余额校验。
+- **广告破解（v8）**：`ads:1` 写入去广告权益，并内联替换 `SDKSAdManager.IsRewardedVideoReady`、`AdsMgr.checkRewardedVideoAdIsReady`、`SDKSAdManager.ShowRewardedVideoAd`；奖励与关闭事件延后一帧发送。实测商店“AD 免费领取”不播放广告也能完成领取流程。
+- **VIP 会员（旧路径）**：写入 `IsVipAndMonthCardPlayerKey`，并调用 `VipDataManager.BuyMonthCardSuccess()`。此路径必须在 Unity 主线程执行；当前版本仍可能不稳定，下一版改为月卡起止时间戳预置。
 - **解锁当前主题**：只解锁当前打开的主题详情页。
 - **单实例浮窗**：跟随游戏启动和退出，展开后可以拖动。
 
@@ -35,23 +36,14 @@ work/plugin/
   pw3d_plugin.py            部署、加载、命令、日志
   floating_ui.ps1           WPF 浮窗
   watch_game.ps1            游戏进程检测
+  monitor_game.ps1          异常与超时监测
   install_autostart.ps1     登录自启动
 work/frida-agent/bundle.js  Frida Java bridge
 work/tools/                 编译用 bionic 存根库
 ```
 
 ## 使用
-1. 启动游戏，浮窗弹出
-2. 点击悬浮球展开面板
-3. 点击“自动拼完”完成当前模型搭建
-4. 点击“解锁当前主题”可以解锁任意主题（大概吧）
-5. 可以实现破解关卡中所需模型的广告，但不确定是“广告破解”还是“vip会员”功能，最好都试一下
-6. 点击右上角×号可以回复折叠
-7. 左键点击退出
 
-   金币/钻石不消耗、广告破解和vip会员功能还不稳定，等我再改进改进   
-
-不用管下面写的
 1. 关闭 TapTap 和 MuMu，运行：
 
 ```powershell
@@ -79,7 +71,11 @@ work/tools/                 编译用 bionic 存根库
 .\run.ps1 ensure
 .\run.ps1 cmd auto
 .\run.ps1 cmd free:1
+.\run.ps1 cmd keep:1
 .\run.ps1 cmd ads:1
+.\run.ps1 cmd adshook:1
+.\run.ps1 cmd adreward
+.\run.ps1 cmd adsstate
 .\run.ps1 cmd vip:1
 .\run.ps1 log
 ```
@@ -97,8 +93,8 @@ Python 写命令文件
 关键目标：
 
 - 自动拼装：`PuzzleManager.StartAutoFinishPuzzle()`、`battlePanel.autoPuzzleSpeed`
-- 免消耗：`PlayerDataManager.CostGoods`、`GoodItemsManager.synGoodsList`
-- 广告：`PlayerDataManager.UpdateRemoveAdData`、`AdsMgr.HandleRewardBasedVideoRewarded`
+- 免消耗：`PlayerDataManager.GetGoods`、`SetGoods`、`SetGoodsWithAddAndConsume`
+- 广告：`PlayerDataManager.SetBuyRemoveAdNum`、`UpdateRemoveAdData`、`AdsMgr.HandleRewardBasedVideoRewarded`
 - VIP：`UserDataManager.SetInt("IsVipAndMonthCardPlayerKey")`、`VipDataManager.BuyMonthCardSuccess`
 - 主题：`KitInfoPanel.kit`、`UnLockKitLevelByKit`、`UpdateLevelKitDataIsUnlock`
 
@@ -114,7 +110,7 @@ Python 写命令文件
 
 | 游戏版本 | 状态 |
 | --- | --- |
-| `3.3.0` | 已核对方法名与字段；金币/钻石、VIP、广告命令实测通过 |
+| `3.3.0` | 自动拼完、广告破解 v8 实测通过；VIP 旧路径待重写 |
 | `3.2.9` | 代码地图与自动拼链路已分析 |
 
 ## 编译

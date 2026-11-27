@@ -18,14 +18,29 @@ and executes commands on the attached worker thread.
 
 ## Free Currency
 
-`PlayerDataManager.CostGoods` computes `newValue = max(current - cost, 0)`.
-The plugin changes the subtraction to keep `current`.
+The A-plan guard reads `PlayerDataManager.GetGoods` on the main thread. When a
+balance drops, it opens a five-second purchase window and writes the target
+value back with `SetGoods` at 300 ms intervals. The client display stays high,
+but the server can still reject or deduct based on the real balance.
 
-`GoodItemsManager.synGoodsList` controls which goods are sent to the server.
-Coin and Diamond are removed from that list so the cost stays local.
+The older `CostGoods` instruction patch and `GoodItemsManager.synGoodsList`
+removal are kept only as fallback paths in older builds.
 
-If the instruction signature is not found, the plugin restores the balance when
-it drops below the value captured when the switch was enabled.
+## Ads
+
+The v8 ad path writes the remove-ad entitlement with
+`PlayerDataManager.SetBuyRemoveAdNum(1)` and `UpdateRemoveAdData()`. It then
+replaces four native entries:
+
+- `SDKSAdManager.IsRewardedVideoReady`
+- `AdsMgr.checkRewardedVideoAdIsReady()` with zero arguments
+- `AdsMgr.checkRewardedVideoAdIsReady(string)` with one argument
+- `SDKSAdManager.ShowRewardedVideoAd`
+
+The show hook returns success and sets a pending flag. The next
+`GameManager.Update` tick calls `AdsMgr.HandleRewardBasedVideoRewarded(true)` and
+`AdsMgr.HandleRewardBasedVideoClosed()`. The delay lets the AdsMgr wrapper finish
+its state update before the reward event is sent.
 
 ## Auto Assemble
 
@@ -33,8 +48,20 @@ The plugin finds the active `battlePanel`, sets `autoPuzzleSpeed` to `0.3`, and
 calls `PuzzleManager.StartAutoFinishPuzzle()`. The game then runs its own
 per-piece animation and combo scoring.
 
+## VIP
+
+The current VIP switch writes `IsVipAndMonthCardPlayerKey` and calls
+`VipDataManager.BuyMonthCardSuccess()`. The callback updates local month-card
+timestamps and UI. It must run on the Unity main thread.
+
+The next version should pre-seed the month-card start and end timestamps and
+clear them on disable. The auxiliary key alone does not make
+`VipDataManager.IsVip()` return true.
+
 ## Limits
 
 - A game update can move method signatures or change field layouts.
+- Server-side balance checks still apply to purchases.
+- Ad rewards can still be rejected if the server requires an ad receipt.
+- VIP changes are client-side; server-issued monthly rewards may not arrive.
 - Theme unlock requires an open theme detail page.
-- Server-side rollback may require using the switch again.

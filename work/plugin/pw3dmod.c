@@ -154,6 +154,8 @@ typedef void *(*fn_type_get_object)(void *type);
 typedef void *(*fn_string_new)(const char *text);
 typedef void *(*fn_field_from_name)(void *klass, const char *name);
 typedef size_t (*fn_field_offset)(void *field);
+typedef void *(*fn_class_get_parent)(void *klass);
+typedef void (*fn_field_static_get_value)(void *field, void *value);
 
 static fn_get_assemblies g_get_assemblies;
 static fn_assembly_get_image g_assembly_get_image;
@@ -165,6 +167,8 @@ static fn_type_get_object g_type_get_object;
 static fn_string_new g_string_new;
 static fn_field_from_name g_field_from_name;
 static fn_field_offset g_field_offset;
+static fn_class_get_parent g_class_get_parent;
+static fn_field_static_get_value g_field_static_get_value;
 
 static void **g_assemblies;
 static size_t g_assembly_count;
@@ -255,6 +259,10 @@ static int api_init(void) {
     g_field_from_name =
         (fn_field_from_name)dlsym(handle, "il2cpp_class_get_field_from_name");
     g_field_offset = (fn_field_offset)dlsym(handle, "il2cpp_field_get_offset");
+    g_class_get_parent =
+        (fn_class_get_parent)dlsym(handle, "il2cpp_class_get_parent");
+    g_field_static_get_value =
+        (fn_field_static_get_value)dlsym(handle, "il2cpp_field_static_get_value");
     attach = (fn_thread_attach)dlsym(handle, "il2cpp_thread_attach");
 
     if (domain_get == 0 || g_get_assemblies == 0 || g_assembly_get_image == 0 ||
@@ -299,6 +307,10 @@ static int g_maintain_tick;
 
 static int g_vip_on;
 static int g_ads_on;
+static int g_ads_want;
+static int g_ads_applied;
+static int g_ads_hook_installed;
+static volatile int g_ad_reward_pending;
 static void save_cfg(void);
 
 static void *player_instance(void) {
@@ -315,34 +327,30 @@ static void free_apply(int on);
 static void apply_vip(int on);
 static void apply_ads(int on);
 static void free_maintain(void);
+static void plana_guard_tick(void);
+static void plana_maybe_arm(void);
+static void ads_hook_install(int announce);
+static void ads_send_reward(void);
+static void ads_send_closed(void);
 
 static void gm_update(void *self, void *method) {
     g_main_tick++;
     if ((g_main_tick % 1800) == 0) {
         log_line("main tick", (void *)(size_t)g_main_tick, 0);
     }
-    if (g_startup_flags != 0 && g_main_tick > 900 &&
-        (g_main_tick % 180) == 0) {
-        if ((g_startup_flags & 4) != 0) {
-            g_startup_flags &= ~4;
-            log_line("startup free apply", 0, 0);
-            free_apply(1);
-        } else if ((g_startup_flags & 1) != 0) {
-            g_startup_flags &= ~1;
-            log_line("startup vip apply", 0, 0);
-            apply_vip(1);
-        } else if ((g_startup_flags & 2) != 0) {
-            g_startup_flags &= ~2;
-            log_line("startup ads apply", 0, 0);
-            apply_ads(1);
-        }
+    plana_maybe_arm();
+    if (g_main_tick > 1800 && g_ads_want && !g_ads_applied) {
+        log_line("startup ads apply", 0, 0);
+        apply_ads(1);
+        ads_hook_install(0);
+    }
+    if (g_ad_reward_pending) {
+        g_ad_reward_pending = 0;
+        ads_send_reward();
+        ads_send_closed();
     }
     execute_pending();
-    g_maintain_tick++;
-    if (g_maintain_tick >= 60) {
-        g_maintain_tick = 0;
-        free_maintain();
-    }
+    plana_guard_tick();
     if (g_gm_orig != 0 && self != 0) {
         ((void (*)(void *, void *))g_gm_orig)(self, method);
     }
@@ -379,6 +387,268 @@ static void restore_main_dispatch(void) {
 static int dispatch_intact(void) {
     return g_gm_method_info != 0 &&
            *(void **)g_gm_method_info == (void *)gm_update;
+}
+
+/* ------------------------------------------------------------------ */
+/* balance write guard                                                 */
+
+static volatile int g_keep_on;
+static int g_keep_target = 999999;
+static int g_balance_hooks;
+static void *g_setgoods_orig;
+static void *g_setgoods_add_orig;
+static void *g_savegoods_orig;
+
+static int is_currency(int type) {
+    return type == 1 || type == 2;
+}
+
+static void guard_setgoods(void *self, int type, int value, int scene,
+                           int is_report) {
+    if (g_keep_on && is_currency(type) && value < g_keep_target) {
+        log_line("guard setgoods", (void *)(size_t)type, (void *)(size_t)value);
+        value = g_keep_target;
+    }
+    if (g_setgoods_orig != 0) {
+        ((void (*)(void *, int, int, int, int))g_setgoods_orig)(
+            self, type, value, scene, is_report);
+    }
+}
+
+static void guard_setgoods_add(void *self, int type, int value, int add_num,
+                               int consume_num, int add_scene,
+                               int consume_scene) {
+    if (g_keep_on && is_currency(type) && value < g_keep_target) {
+        log_line("guard setgoods add", (void *)(size_t)type, (void *)(size_t)value);
+        value = g_keep_target;
+    }
+    if (g_setgoods_add_orig != 0) {
+        ((void (*)(void *, int, int, int, int, int, int))g_setgoods_add_orig)(
+            self, type, value, add_num, consume_num, add_scene, consume_scene);
+    }
+}
+
+static void guard_savegoods(void *self, int type, int value) {
+    if (g_keep_on && is_currency(type) && value < g_keep_target) {
+        log_line("guard savegoods", (void *)(size_t)type, (void *)(size_t)value);
+        value = g_keep_target;
+    }
+    if (g_savegoods_orig != 0) {
+        ((void (*)(void *, int, int))g_savegoods_orig)(self, type, value);
+    }
+}
+
+static int hook_method_pointer(void *klass, const char *name, int argc,
+                               void *replacement, void **orig_out) {
+    void *info = method_info(klass, name, argc);
+    unsigned long page;
+    if (info == 0) {
+        return 0;
+    }
+    page = (unsigned long)info & ~(unsigned long)(g_page_size - 1);
+    if (mprotect((void *)page, (size_t)g_page_size, PROT_RW) != 0) {
+        return 0;
+    }
+    *orig_out = *(void **)info;
+    *(void **)info = replacement;
+    __builtin___clear_cache((char *)info, (char *)info + 8);
+    log_line("balance hook installed", info, *orig_out);
+    return 1;
+}
+
+static int install_balance_hooks(void) {
+    void *klass = find_class("PlayerDataManager");
+    int count = 0;
+    if (klass == 0) {
+        return 0;
+    }
+    count += hook_method_pointer(klass, "SetGoods", 4,
+                                 (void *)guard_setgoods, &g_setgoods_orig);
+    count += hook_method_pointer(klass, "SetGoodsWithAddAndConsume", 6,
+                                 (void *)guard_setgoods_add, &g_setgoods_add_orig);
+    count += hook_method_pointer(klass, "SaveGoods", 2,
+                                 (void *)guard_savegoods, &g_savegoods_orig);
+    log_line("balance hooks ready", (void *)(size_t)count, 0);
+    return count;
+}
+
+/* ------------------------------------------------------------------ */
+/* plan A: sync rewrite guard                                          */
+
+static int get_goods(int type);
+static void set_goods(int type, int value);
+static void save_cfg(void);
+
+static int g_keep_want;
+static int g_guard_interval = 30;
+static int g_guard_window;
+static int g_guard_cooldown;
+static int g_guard_counter;
+static int g_guard_last_coin = -1;
+static int g_guard_last_diamond = -1;
+static int g_guard_writes;
+static int g_guard_drops;
+
+static const char *guard_state(void) {
+    if (!g_keep_on) {
+        return g_keep_want ? "armed_wait" : "disabled";
+    }
+    if (g_guard_window > 0) {
+        return "purchase_window";
+    }
+    if (g_guard_cooldown > 0) {
+        return "cooldown";
+    }
+    return "armed";
+}
+
+static void guard_write(int type, int old_value) {
+    set_goods(type, g_keep_target);
+    log_line("guard_write type", (void *)(size_t)type, (void *)(size_t)old_value);
+    log_line("guard_write new", (void *)(size_t)g_keep_target, 0);
+    g_guard_writes++;
+}
+
+static void plana_arm(int force) {
+    int coin = get_goods(2);
+    int diamond = get_goods(1);
+    if (!force && coin <= 0 && diamond <= 0) {
+        return;
+    }
+    g_keep_on = 1;
+    g_keep_want = 1;
+    g_guard_counter = 0;
+    g_guard_cooldown = 0;
+    g_guard_last_coin = coin;
+    g_guard_last_diamond = diamond;
+    log_line("guard_start coin", (void *)(size_t)coin, (void *)(size_t)diamond);
+    if (coin < g_keep_target) {
+        guard_write(2, coin);
+    }
+    if (diamond < g_keep_target) {
+        guard_write(1, diamond);
+    }
+}
+
+static void plana_maybe_arm(void) {
+    if (g_keep_on || !g_keep_want) {
+        return;
+    }
+    if (g_main_tick < 1800) {
+        return;
+    }
+    plana_arm(0);
+}
+
+static void plana_guard_tick(void) {
+    int coin;
+    int diamond;
+    int interval;
+    int wrote = 0;
+    if (!g_keep_on) {
+        return;
+    }
+    if (g_guard_cooldown > 0) {
+        g_guard_cooldown--;
+        return;
+    }
+    g_guard_counter++;
+    interval = g_guard_window > 0 ? 18 : g_guard_interval;
+    if (g_guard_counter < interval) {
+        return;
+    }
+    g_guard_counter = 0;
+    if (g_guard_window > 0) {
+        g_guard_window--;
+    }
+    coin = get_goods(2);
+    diamond = get_goods(1);
+    if (coin <= 0 && diamond <= 0) {
+        return;
+    }
+    if (g_guard_last_coin >= 0 && coin < g_guard_last_coin) {
+        log_line("sync_drop coin old", (void *)(size_t)g_guard_last_coin,
+                 (void *)(size_t)coin);
+        g_guard_window = 300;
+        g_guard_drops++;
+    }
+    if (g_guard_last_diamond >= 0 && diamond < g_guard_last_diamond) {
+        log_line("sync_drop diamond old", (void *)(size_t)g_guard_last_diamond,
+                 (void *)(size_t)diamond);
+        g_guard_window = 300;
+        g_guard_drops++;
+    }
+    if (coin < g_keep_target) {
+        guard_write(2, coin);
+        coin = g_keep_target;
+        wrote = 1;
+    }
+    if (diamond < g_keep_target) {
+        guard_write(1, diamond);
+        diamond = g_keep_target;
+        wrote = 1;
+    }
+    g_guard_last_coin = coin;
+    g_guard_last_diamond = diamond;
+    if (wrote) {
+        g_guard_cooldown = 18;
+    }
+}
+
+static void plana_keep(int on) {
+    g_keep_want = on;
+    if (on) {
+        plana_arm(1);
+    } else {
+        g_keep_on = 0;
+        g_guard_window = 0;
+        g_guard_cooldown = 0;
+        g_guard_counter = 0;
+        log_line("guard_off", 0, 0);
+    }
+    save_cfg();
+}
+
+static void write_status(void) {
+    FILE *out = fopen(RESULT_PATH, "w");
+    if (out == 0) {
+        return;
+    }
+    fprintf(out,
+            "status:vip=%d ads=%d coin=%d diamond=%d keep=%d target=%d state=%s writes=%d drops=%d\n",
+            g_vip_on, g_ads_on, get_goods(2), get_goods(1), g_keep_on, g_keep_target,
+            guard_state(), g_guard_writes, g_guard_drops);
+    fclose(out);
+}
+
+static void write_dump(void) {
+    FILE *in = fopen(LOG_PATH, "rb");
+    char buffer[6144];
+    int got;
+    int i;
+    int lines = 0;
+    int start = 0;
+    if (in == 0) {
+        write_result("dump:empty");
+        return;
+    }
+    got = (int)fread(buffer, 1, sizeof(buffer) - 1, in);
+    fclose(in);
+    if (got <= 0) {
+        write_result("dump:empty");
+        return;
+    }
+    buffer[got] = 0;
+    for (i = got - 1; i >= 0; i--) {
+        if (buffer[i] == '\n') {
+            lines++;
+            if (lines > 50) {
+                start = i + 1;
+                break;
+            }
+        }
+    }
+    write_result(buffer + start);
 }
 
 /* ------------------------------------------------------------------ */
@@ -480,44 +750,13 @@ static void set_goods(int type, int value) {
 }
 
 static void free_maintain(void) {
-    int coin;
-    int diamond;
-    if (!g_free_on) {
-        return;
-    }
-    disable_currency_sync();
-    coin = get_goods(2);
-    if (coin < g_base_coin) {
-        set_goods(2, g_base_coin);
-    }
-    diamond = get_goods(1);
-    if (diamond < g_base_diamond) {
-        set_goods(1, g_base_diamond);
-    }
+    plana_guard_tick();
 }
 
 static void free_apply(int on) {
     g_free_on = on;
-    if (on) {
-        g_base_coin = get_goods(2);
-        g_base_diamond = get_goods(1);
-        disable_currency_sync();
-        patch_free_cost();
-        log_line("free currency on", (void *)(size_t)g_base_coin,
-                 (void *)(size_t)g_base_diamond);
-    } else {
-        if (g_cost_patched_addr != 0) {
-            unsigned long page = (unsigned long)g_cost_patched_addr &
-                                 ~(unsigned long)(g_page_size - 1);
-            if (mprotect((void *)page, (size_t)g_page_size, PROT_RWX) == 0) {
-                *(unsigned int *)g_cost_patched_addr = g_cost_orig;
-                __builtin___clear_cache((char *)g_cost_patched_addr,
-                                         (char *)g_cost_patched_addr + 4);
-            }
-            g_cost_patched_addr = 0;
-        }
-        log_line("free currency off", 0, 0);
-    }
+    plana_keep(on);
+    log_line("free currency toggled", (void *)(size_t)on, 0);
 }
 
 /* ------------------------------------------------------------------ */
@@ -636,18 +875,168 @@ static void apply_ads(int on) {
         return;
     }
     if (on) {
+        ((void (*)(void *, int, void *))set_remove)(player, 1, 0);
         if (update_remove != 0) {
             ((void (*)(void *, void *))update_remove)(player, 0);
-        } else {
-            ((void (*)(void *, int, void *))set_remove)(player, 1, 0);
         }
     } else {
         ((void (*)(void *, int, void *))set_remove)(player, 0, 0);
     }
     g_ads_on = on;
+    g_ads_want = on;
+    g_ads_applied = on;
     save_cfg();
     write_result(on ? "ads:on" : "ads:off");
     log_line(on ? "ads on" : "ads off", player, 0);
+    if (on) {
+        ads_hook_install(0);
+    }
+}
+
+static void *ads_instance(void) {
+    void *klass = find_class("AdsMgr");
+    void *parent;
+    void *field;
+    void *value = 0;
+    if (klass == 0 || g_field_static_get_value == 0) {
+        return 0;
+    }
+    parent = g_class_get_parent == 0 ? 0 : g_class_get_parent(klass);
+    field = g_field_from_name(parent == 0 ? klass : parent, "instance");
+    if (field == 0) {
+        field = g_field_from_name(klass, "instance");
+    }
+    if (field == 0) {
+        return 0;
+    }
+    g_field_static_get_value(field, &value);
+    return value;
+}
+
+static void ads_send_reward(void) {
+    void *ads = ads_instance();
+    void *klass = find_class("AdsMgr");
+    void *reward = method_ptr(klass, "HandleRewardBasedVideoRewarded", 1);
+    if (ads != 0 && reward != 0) {
+        ((void (*)(void *, int, void *))reward)(ads, 1, 0);
+        log_line("ads reward sent", ads, reward);
+    }
+}
+
+static void ads_send_closed(void) {
+    void *ads = ads_instance();
+    void *klass = find_class("AdsMgr");
+    void *closed = method_ptr(klass, "HandleRewardBasedVideoClosed", 0);
+    if (ads != 0 && closed != 0) {
+        ((void (*)(void *, void *))closed)(ads, 0);
+        log_line("ads closed sent", ads, closed);
+    }
+}
+
+static void ads_reward(void) {
+    void *ads = ads_instance();
+    void *klass = find_class("AdsMgr");
+    void *reward = method_ptr(klass, "HandleRewardBasedVideoRewarded", 1);
+    if (ads == 0 || reward == 0) {
+        write_result("error:adreward api missing");
+        log_line("adreward api missing", ads, reward);
+        return;
+    }
+    ads_send_reward();
+    ads_send_closed();
+    write_result("adreward:ok");
+    log_line("adreward sent", ads, 0);
+}
+
+static int patch_replace(void *target, void *hook) {
+    unsigned int *code = (unsigned int *)target;
+    unsigned long page =
+        (unsigned long)target & ~(unsigned long)(g_page_size - 1);
+    if (mprotect((void *)page, (size_t)g_page_size, PROT_RWX) != 0) {
+        return 0;
+    }
+    code[0] = 0x58000050u;
+    code[1] = 0xD61F0200u;
+    code[2] = (unsigned int)(unsigned long)hook;
+    code[3] = (unsigned int)(((unsigned long)hook) >> 32);
+    __builtin___clear_cache((char *)code, (char *)code + 16);
+    return 1;
+}
+
+static int ads_show_hook(void *self, long scene, int cid, int completion,
+                         int retry, void *method) {
+    log_line("ad show hook", self, (void *)(size_t)scene);
+    g_ad_reward_pending = 1;
+    return 1;
+}
+
+static int ads_ready_hook(void *self, void *method) {
+    return 1;
+}
+
+static void ads_hook_install(int announce) {
+    void *klass = find_class("SDKSAdManager");
+    void *ads_klass = find_class("AdsMgr");
+    void *target;
+    void *ready;
+    void *check0;
+    void *check1;
+    if (g_ads_hook_installed) {
+        if (announce) {
+            write_result("adshook:on");
+        }
+        return;
+    }
+    target = method_ptr(klass, "ShowRewardedVideoAd", 4);
+    ready = method_ptr(klass, "IsRewardedVideoReady", 0);
+    check0 = method_ptr(ads_klass, "checkRewardedVideoAdIsReady", 0);
+    check1 = method_ptr(ads_klass, "checkRewardedVideoAdIsReady", 1);
+    if (target == 0) {
+        log_line("adshook no target", klass, 0);
+        if (announce) {
+            write_result("adshook:error");
+        }
+        return;
+    }
+    if (ready != 0 && patch_replace(ready, (void *)ads_ready_hook)) {
+        log_line("adready hook installed", ready, 0);
+    }
+    if (check0 != 0 && patch_replace(check0, (void *)ads_ready_hook)) {
+        log_line("adsmgr check0 hook installed", check0, 0);
+    }
+    if (check1 != 0 && patch_replace(check1, (void *)ads_ready_hook)) {
+        log_line("adsmgr check1 hook installed", check1, 0);
+    }
+    if (patch_replace(target, (void *)ads_show_hook)) {
+        g_ads_hook_installed = 1;
+        log_line("adshook installed", target, 0);
+        if (announce) {
+            write_result("adshook:on");
+        }
+    } else {
+        log_line("adshook failed", target, 0);
+        if (announce) {
+            write_result("adshook:failed");
+        }
+    }
+}
+
+static void ads_state(void) {
+    void *player = player_instance();
+    void *klass = find_class("PlayerDataManager");
+    void *is_buy = method_ptr(klass, "IsBuyRemoveAd", 0);
+    int value = -1;
+    if (player != 0 && is_buy != 0) {
+        value = ((int (*)(void *, void *))is_buy)(player, 0);
+    }
+    if (value == 1) {
+        write_result("adsstate:1");
+    } else if (value == 0) {
+        write_result("adsstate:0");
+    } else {
+        write_result("adsstate:error");
+    }
+    log_line("adsstate", (void *)(size_t)value, player);
 }
 
 /* ------------------------------------------------------------------ */
@@ -773,7 +1162,17 @@ enum {
     REQ_VIP = 3,
     REQ_THEME = 4,
     REQ_FREE = 5,
-    REQ_STATUS = 6
+    REQ_STATUS = 6,
+    REQ_KEEP = 7,
+    REQ_GUARDTEST = 8,
+    REQ_TARGET = 9,
+    REQ_INTERVAL = 10,
+    REQ_PROBE = 11,
+    REQ_DUMP = 12,
+    REQ_RESET = 13,
+    REQ_ADREWARD = 14,
+    REQ_ADSSTATE = 15,
+    REQ_ADSHOOK = 16
 };
 
 static volatile int g_req_kind;
@@ -786,7 +1185,11 @@ static void execute_pending(void) {
     if (kind == REQ_NONE) {
         return;
     }
-    if (!g_use_main && kind != REQ_STATUS) {
+    if (!g_use_main) {
+        if (kind == REQ_STATUS) {
+            g_req_kind = REQ_NONE;
+            write_result("status:no_main_thread");
+        }
         return;
     }
     g_req_kind = REQ_NONE;
@@ -799,10 +1202,56 @@ static void execute_pending(void) {
     } else if (kind == REQ_THEME) {
         unlock_current_theme();
     } else if (kind == REQ_FREE) {
+        g_free_on = value;
         free_apply(value);
         write_result(value ? "free:on" : "free:off");
     } else if (kind == REQ_STATUS) {
-        write_result(g_vip_on ? "status:vip=1" : "status:vip=0");
+        write_status();
+    } else if (kind == REQ_KEEP) {
+        g_free_on = value;
+        plana_keep(value);
+        write_result(value ? "keep:on" : "keep:off");
+    } else if (kind == REQ_TARGET) {
+        if (value > 0) {
+            g_keep_target = value;
+        }
+        log_line("guard target set", (void *)(size_t)g_keep_target, 0);
+        save_cfg();
+        write_result("target:set");
+    } else if (kind == REQ_INTERVAL) {
+        if (value < 6) {
+            value = 6;
+        }
+        if (value > 600) {
+            value = 600;
+        }
+        g_guard_interval = value;
+        log_line("guard interval set", (void *)(size_t)g_guard_interval, 0);
+        write_result("interval:set");
+    } else if (kind == REQ_PROBE) {
+        plana_arm(1);
+        g_guard_window = 300;
+        g_guard_cooldown = 0;
+        log_line("probe_begin", (void *)(size_t)g_guard_last_coin,
+                 (void *)(size_t)g_guard_last_diamond);
+        write_result("probe:begin");
+    } else if (kind == REQ_DUMP) {
+        write_dump();
+    } else if (kind == REQ_RESET) {
+        g_guard_window = 0;
+        g_guard_cooldown = 0;
+        g_guard_counter = 0;
+        write_result("reset:ok");
+    } else if (kind == REQ_ADREWARD) {
+        ads_reward();
+    } else if (kind == REQ_ADSSTATE) {
+        ads_state();
+    } else if (kind == REQ_ADSHOOK) {
+        ads_hook_install(1);
+    } else if (kind == REQ_GUARDTEST) {
+        set_goods(2, 12345);
+        set_goods(1, 1234);
+        write_result("guard:test");
     }
 }
 
@@ -815,6 +1264,7 @@ static void save_cfg(void) {
         return;
     }
     fprintf(out, "vip=%d\nads=%d\nfree=%d\n", g_vip_on, g_ads_on, g_free_on);
+    fprintf(out, "keep=%d\ntarget=%d\n", g_keep_want, g_keep_target);
     fclose(out);
 }
 
@@ -840,6 +1290,15 @@ static void load_cfg(int *vip, int *ads, int *free_mode) {
             if (text_starts(buffer + i, "free=1")) {
                 *free_mode = 1;
             }
+            if (text_starts(buffer + i, "keep=1")) {
+                *free_mode = 1;
+            }
+            if (text_starts(buffer + i, "target=")) {
+                int target = 0;
+                if (parse_int(buffer + i + 7, &target) && target > 0) {
+                    g_keep_target = target;
+                }
+            }
         }
     }
 }
@@ -863,6 +1322,35 @@ static void submit_line(const char *buffer) {
         g_req_kind = REQ_FREE;
     } else if (text_same(buffer, "status")) {
         g_req_kind = REQ_STATUS;
+    } else if (text_starts(buffer, "keep:")) {
+        g_req_value = buffer[5] == '1';
+        g_req_kind = REQ_KEEP;
+    } else if (text_starts(buffer, "target:")) {
+        int target = 0;
+        if (parse_int(buffer + 7, &target)) {
+            g_req_value = target;
+        }
+        g_req_kind = REQ_TARGET;
+    } else if (text_starts(buffer, "interval:")) {
+        int interval = 0;
+        if (parse_int(buffer + 9, &interval)) {
+            g_req_value = interval;
+        }
+        g_req_kind = REQ_INTERVAL;
+    } else if (text_same(buffer, "probe")) {
+        g_req_kind = REQ_PROBE;
+    } else if (text_same(buffer, "dump")) {
+        g_req_kind = REQ_DUMP;
+    } else if (text_same(buffer, "reset")) {
+        g_req_kind = REQ_RESET;
+    } else if (text_same(buffer, "adreward")) {
+        g_req_kind = REQ_ADREWARD;
+    } else if (text_same(buffer, "adsstate")) {
+        g_req_kind = REQ_ADSSTATE;
+    } else if (text_starts(buffer, "adshook:")) {
+        g_req_kind = REQ_ADSHOOK;
+    } else if (text_same(buffer, "guardtest")) {
+        g_req_kind = REQ_GUARDTEST;
     }
 }
 
@@ -899,6 +1387,9 @@ static void *worker(void *arg) {
     for (;;) {
         if (!g_ready) {
             if (api_init()) {
+                if (!g_balance_hooks) {
+                    g_balance_hooks = install_balance_hooks();
+                }
                 if (install_main_dispatch()) {
                     int waited = 0;
                     while (waited < 20 && g_main_tick == 0) {
@@ -912,6 +1403,10 @@ static void *worker(void *arg) {
                 }
                 load_cfg(&vip, &ads, &free_mode);
                 g_startup_flags = 0;
+                g_free_on = free_mode;
+                g_keep_want = free_mode;
+                g_ads_want = ads;
+                g_ads_applied = 0;
                 log_line("plugin ready", (void *)(size_t)vip, (void *)(size_t)free_mode);
             }
         } else {
@@ -955,7 +1450,7 @@ static void *worker(void *arg) {
 
 __attribute__((constructor)) static void pw3dmod_init(void) {
     unsigned long thread = 0;
-    log_line("pw3dmod v3.1 loaded", 0, 0);
+    log_line("pw3dmod planA+ads v8 adauto loaded", 0, 0);
     g_lock_fd = open("/data/user/0/com.puzzle.miniworld.cn/files/pw3d.lock",
                      O_CREAT | O_RDWR, 0666);
     if (g_lock_fd >= 0 && flock(g_lock_fd, LOCK_EX | LOCK_NB) != 0) {
