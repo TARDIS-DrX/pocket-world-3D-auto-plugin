@@ -6,7 +6,7 @@
 ![Python](https://img.shields.io/badge/python-3.10%2B-3776AB)
 ![Game](https://img.shields.io/badge/Pocket%20World%203D-3.3.0-2ea44f)
 
-我不想再看到别人因为这些家而流泪了，我希望大家都开开心心的，所以请看好了，我的**插件**！👍
+我不想再看到别人因为这些限制而伤心了，我希望大家都开开心心的，所以请看好了，我的**插件**！👍
 
 ## 下载
 
